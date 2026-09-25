@@ -1,14 +1,18 @@
 import { useState } from 'react';
-import { Search, CheckCircle2, Circle, Loader2 } from 'lucide-react';
+import { Search, CheckCircle2, Circle, Loader2, CreditCard, Receipt, Check, Download } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
-import { STATUS_ORDER, STATUS_CONFIG, formatDateTime } from '../../lib/helpers';
+import { STATUS_ORDER, STATUS_CONFIG, formatDateTime, formatCurrency, formatDate } from '../../lib/helpers';
 import StatusBadge from '../../components/common/StatusBadge';
+import { initiateRazorpayPayment } from '../../lib/razorpay';
+import toast from 'react-hot-toast';
 
 export default function TrackRepairPage() {
   const [repairId, setRepairId] = useState('');
   const [repair, setRepair] = useState(null);
   const [history, setHistory] = useState([]);
+  const [invoice, setInvoice] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [paying, setPaying] = useState(false);
   const [error, setError] = useState('');
   const [searched, setSearched] = useState(false);
 
@@ -18,12 +22,13 @@ export default function TrackRepairPage() {
     setLoading(true);
     setError('');
     setRepair(null);
+    setInvoice(null);
     setSearched(true);
 
     try {
       const { data, error: err } = await supabase
         .from('repairs')
-        .select(`*, customers(full_name), services(service_name), technicians(name)`)
+        .select(`*, customers(full_name, phone, email), services(service_name), technicians(name)`)
         .eq('repair_id', repairId.trim().toUpperCase())
         .single();
 
@@ -34,17 +39,62 @@ export default function TrackRepairPage() {
 
       setRepair(data);
 
-      const { data: hist } = await supabase
-        .from('repair_history')
-        .select('*')
-        .eq('repair_id', data.id)
-        .order('created_at', { ascending: true });
+      const [{ data: hist }, { data: inv }] = await Promise.all([
+        supabase
+          .from('repair_history')
+          .select('*')
+          .eq('repair_id', data.id)
+          .order('created_at', { ascending: true }),
+        supabase
+          .from('invoices')
+          .select('*')
+          .eq('repair_id', data.id)
+          .maybeSingle()
+      ]);
 
       setHistory(hist || []);
+      setInvoice(inv || null);
     } catch {
       setError('Something went wrong. Please try again.');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handlePayNow = async () => {
+    if (!invoice) return;
+    setPaying(true);
+    try {
+      const response = await initiateRazorpayPayment({
+        amount: invoice.total_amount,
+        invoiceNumber: invoice.invoice_number,
+        repairId: repair.repair_id,
+        customerName: repair.customers?.full_name || '',
+        customerEmail: repair.customers?.email || '',
+        customerPhone: repair.customers?.phone || '',
+      });
+
+      const updateData = {
+        payment_status: 'paid',
+        payment_method: 'Razorpay',
+        transaction_id: response.razorpay_payment_id,
+        paid_at: new Date().toISOString()
+      };
+
+      try {
+        await supabase.from('invoices').update(updateData).eq('id', invoice.id);
+      } catch {
+        await supabase.from('invoices').update({ payment_status: 'paid' }).eq('id', invoice.id);
+      }
+
+      toast.success('Payment successful via Razorpay!');
+      setInvoice((prev) => ({ ...prev, ...updateData }));
+    } catch (err) {
+      if (err.message !== 'Payment cancelled by user.') {
+        toast.error(err.message || 'Payment failed');
+      }
+    } finally {
+      setPaying(false);
     }
   };
 
@@ -122,6 +172,82 @@ export default function TrackRepairPage() {
                   </div>
                 </div>
               </div>
+
+              {/* Invoice & Razorpay Card (if invoice generated) */}
+              {invoice && (
+                <div className="bg-white rounded-2xl p-6 shadow-sm border border-blue-100">
+                  <div className="flex flex-wrap items-center justify-between gap-3 mb-4 pb-4 border-b border-gray-100">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center">
+                        <Receipt className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <h4 className="font-bold text-gray-900">Repair Invoice #{invoice.invoice_number}</h4>
+                        <p className="text-xs text-gray-400">Date: {formatDate(invoice.invoice_date)}</p>
+                      </div>
+                    </div>
+                    {invoice.payment_status === 'paid' ? (
+                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-green-100 text-green-700">
+                        <Check className="w-3.5 h-3.5" /> PAID VIA RAZORPAY
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-700">
+                        PAYMENT PENDING
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs mb-4 bg-gray-50 p-3 rounded-xl">
+                    <div>
+                      <p className="text-gray-500">Service</p>
+                      <p className="font-semibold text-gray-800">{formatCurrency(invoice.service_charge)}</p>
+                    </div>
+                    <div>
+                      <p className="text-gray-500">Parts</p>
+                      <p className="font-semibold text-gray-800">{formatCurrency(invoice.parts_cost)}</p>
+                    </div>
+                    <div>
+                      <p className="text-gray-500">Labour</p>
+                      <p className="font-semibold text-gray-800">{formatCurrency(invoice.labour_charge)}</p>
+                    </div>
+                    <div>
+                      <p className="text-gray-500">Total Amount</p>
+                      <p className="font-bold text-sm text-blue-600">{formatCurrency(invoice.total_amount)}</p>
+                    </div>
+                  </div>
+
+                  {invoice.payment_status === 'paid' ? (
+                    <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-green-700 bg-green-50 p-3 rounded-xl border border-green-200">
+                      <span>✓ Payment received via Razorpay (Txn ID: {invoice.transaction_id || 'RZP-PAID'})</span>
+                      <button
+                        onClick={() => window.print()}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white text-gray-700 rounded-lg font-medium border border-gray-200 hover:bg-gray-50 transition-all"
+                      >
+                        <Download className="w-3.5 h-3.5" /> Receipt
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
+                      <p className="text-xs text-gray-500">Pay securely with UPI, Credit/Debit Card, or NetBanking</p>
+                      <button
+                        onClick={handlePayNow}
+                        disabled={paying}
+                        className="inline-flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-xl font-bold text-xs shadow-md shadow-blue-500/20 transition-all disabled:opacity-50 cursor-pointer"
+                      >
+                        {paying ? (
+                          <>
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" /> Processing...
+                          </>
+                        ) : (
+                          <>
+                            <CreditCard className="w-3.5 h-3.5" /> Pay {formatCurrency(invoice.total_amount)} via Razorpay
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Timeline */}
               <div className="bg-white rounded-2xl p-6 shadow-sm">

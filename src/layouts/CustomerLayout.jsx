@@ -1,11 +1,12 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { LayoutDashboard, Wrench, Plus, MessageSquare, User, LogOut, Menu, X, Bell } from 'lucide-react';
+import { LayoutDashboard, Wrench, Plus, MessageSquare, User, LogOut, Menu, X, Bell, Receipt } from 'lucide-react';
 import { useState } from 'react';
 
 const navItems = [
   { icon: LayoutDashboard, label: 'Dashboard', path: '/customer/dashboard' },
   { icon: Wrench, label: 'My Repairs', path: '/customer/my-repairs' },
+  { icon: Receipt, label: 'Invoices & Pay', path: '/customer/invoices' },
   { icon: Plus, label: 'Book Repair', path: '/customer/book-repair' },
   { icon: MessageSquare, label: 'Feedback', path: '/customer/feedback' },
   { icon: User, label: 'Profile', path: '/customer/profile' },

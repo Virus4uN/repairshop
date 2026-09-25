@@ -25,6 +25,7 @@ import CustomerDashboard from './pages/customer/CustomerDashboard';
 import BookRepair from './pages/customer/BookRepair';
 import MyRepairs from './pages/customer/MyRepairs';
 import RepairDetails from './pages/customer/RepairDetails';
+import CustomerInvoices from './pages/customer/CustomerInvoices';
 import CustomerFeedback from './pages/customer/CustomerFeedback';
 import CustomerProfile from './pages/customer/CustomerProfile';
 
@@ -111,6 +112,7 @@ function App() {
             <Route path="book-repair" element={<BookRepair />} />
             <Route path="my-repairs" element={<MyRepairs />} />
             <Route path="repairs/:id" element={<RepairDetails />} />
+            <Route path="invoices" element={<CustomerInvoices />} />
             <Route path="feedback" element={<CustomerFeedback />} />
             <Route path="feedback/:id" element={<CustomerFeedback />} />
             <Route path="profile" element={<CustomerProfile />} />

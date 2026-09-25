@@ -98,8 +98,16 @@ CREATE TABLE IF NOT EXISTS public.invoices (
   discount DECIMAL(10,2) DEFAULT 0,
   total_amount DECIMAL(10,2) DEFAULT 0,
   payment_status VARCHAR(20) DEFAULT 'unpaid',
+  payment_method VARCHAR(50) DEFAULT 'Razorpay',
+  transaction_id VARCHAR(100),
+  paid_at TIMESTAMPTZ,
   invoice_date TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Ensure columns exist if table was already created
+ALTER TABLE public.invoices ADD COLUMN IF NOT EXISTS payment_method VARCHAR(50) DEFAULT 'Razorpay';
+ALTER TABLE public.invoices ADD COLUMN IF NOT EXISTS transaction_id VARCHAR(100);
+ALTER TABLE public.invoices ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ;
 
 -- 8. FEEDBACK TABLE
 CREATE TABLE IF NOT EXISTS public.feedback (

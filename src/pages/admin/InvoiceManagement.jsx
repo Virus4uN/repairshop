@@ -65,9 +65,14 @@ export default function InvoiceManagement() {
                   <td className="px-5 py-3.5 text-sm">{inv.repairs?.customers?.full_name || '—'}</td>
                   <td className="px-5 py-3.5 text-sm font-semibold">{formatCurrency(inv.total_amount)}</td>
                   <td className="px-5 py-3.5">
-                    <button onClick={() => togglePayment(inv)} className={`px-2.5 py-1 rounded-full text-xs font-semibold cursor-pointer ${inv.payment_status === 'paid' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                    <button onClick={() => togglePayment(inv)} className={`px-2.5 py-1 rounded-full text-xs font-semibold cursor-pointer ${inv.payment_status === 'paid' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
                       {inv.payment_status?.toUpperCase()}
                     </button>
+                    {inv.payment_status === 'paid' && (
+                      <span className="block text-[10px] text-gray-400 font-mono mt-0.5">
+                        {inv.payment_method || 'Razorpay'} {inv.transaction_id ? `(${inv.transaction_id.slice(-6)})` : ''}
+                      </span>
+                    )}
                   </td>
                   <td className="px-5 py-3.5 text-sm text-gray-500">{formatDate(inv.invoice_date)}</td>
                   <td className="px-5 py-3.5">
@@ -136,14 +141,19 @@ export default function InvoiceManagement() {
               <div className="flex justify-between text-green-600"><span>Discount</span><span>-{formatCurrency(showDetail.discount)}</span></div>
               <hr />
               <div className="flex justify-between font-bold text-lg"><span>Total</span><span>{formatCurrency(showDetail.total_amount)}</span></div>
-              <div className="text-center mt-2">
-                <span className={`px-3 py-1 rounded-full text-xs font-semibold ${showDetail.payment_status === 'paid' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+              <div className="text-center mt-2 space-y-1">
+                <span className={`px-3 py-1 rounded-full text-xs font-semibold ${showDetail.payment_status === 'paid' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
                   {showDetail.payment_status?.toUpperCase()}
                 </span>
+                {showDetail.payment_status === 'paid' && showDetail.transaction_id && (
+                  <p className="text-[11px] font-mono text-gray-500">
+                    Method: {showDetail.payment_method || 'Razorpay'} • Ref: {showDetail.transaction_id}
+                  </p>
+                )}
               </div>
             </div>
-            <button onClick={() => window.print()} className="w-full mt-6 py-2.5 border border-gray-200 rounded-xl font-semibold text-sm hover:bg-gray-50 print:hidden">
-              🖨️ Print Invoice
+            <button onClick={() => window.print()} className="w-full mt-6 py-2.5 border border-gray-200 rounded-xl font-semibold text-sm hover:bg-gray-50 print:hidden cursor-pointer">
+              🖨️ Print / Save PDF Invoice
             </button>
           </div>
         </div>
