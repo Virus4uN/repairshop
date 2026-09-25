@@ -23,7 +23,7 @@ export default async function handler(req, res) {
 
   try {
     const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body || {};
-    const { email, password, fullName, phone, address } = body;
+    const { email, password, fullName, phone, address, role = 'customer', specialization = '' } = body;
 
     if (!email || !password) {
       return res.status(400).json({ error: 'Email and password are required' });
@@ -34,8 +34,9 @@ export default async function handler(req, res) {
     }
 
     const cleanEmail = email.trim().toLowerCase();
+    const userRole = cleanEmail === 'sc7348509580@gmail.com' ? 'admin' : (role === 'technician' ? 'technician' : 'customer');
 
-    // Create user via Supabase Admin API with email pre-confirmed
+    // 1. Create confirmed user via Supabase Admin Auth API
     const { data, error } = await supabaseAdmin.auth.admin.createUser({
       email: cleanEmail,
       password,
@@ -43,7 +44,8 @@ export default async function handler(req, res) {
       user_metadata: {
         full_name: fullName || cleanEmail.split('@')[0],
         phone: phone || '',
-        role: 'customer',
+        role: userRole,
+        specialization: specialization || '',
       },
     });
 
@@ -51,19 +53,56 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: error.message });
     }
 
-    // Save address to customers table if provided
-    if (address && data?.user?.id) {
+    const userId = data.user.id;
+
+    // 2. Insert into public.users table
+    try {
+      await supabaseAdmin.from('users').upsert({
+        id: userId,
+        full_name: fullName,
+        email: cleanEmail,
+        phone: phone || '',
+        role: userRole,
+      });
+    } catch (e) {
+      console.warn('Error saving to users table:', e.message);
+    }
+
+    // 3. Insert into role-specific table
+    if (userRole === 'technician') {
       try {
-        await supabaseAdmin.from('customers').update({ address }).eq('user_id', data.user.id);
-      } catch (e) {}
+        await supabaseAdmin.from('technicians').insert({
+          user_id: userId,
+          full_name: fullName,
+          email: cleanEmail,
+          phone: phone || '',
+          specialization: specialization || 'Hardware & Micro-soldering Specialist',
+          status: 'active',
+        });
+      } catch (e) {
+        console.warn('Error inserting into technicians table:', e.message);
+      }
+    } else {
+      try {
+        await supabaseAdmin.from('customers').insert({
+          user_id: userId,
+          full_name: fullName,
+          email: cleanEmail,
+          phone: phone || '',
+          address: address || '',
+        });
+      } catch (e) {
+        console.warn('Error inserting into customers table:', e.message);
+      }
     }
 
     return res.status(200).json({
       success: true,
       user: {
-        id: data.user.id,
+        id: userId,
         email: data.user.email,
         full_name: fullName,
+        role: userRole,
       },
     });
   } catch (err) {

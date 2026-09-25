@@ -110,13 +110,13 @@ export function AuthProvider({ children }) {
     }
   };
 
-  const signUp = async ({ email, password, fullName, phone, address }) => {
+  const signUp = async ({ email, password, fullName, phone, address, role = 'customer', specialization = '' }) => {
     // 1. Try serverless instant registration first (pre-confirms email and avoids SMTP failure)
     try {
       const res = await fetch('/api/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password, fullName, phone, address }),
+        body: JSON.stringify({ email, password, fullName, phone, address, role, specialization }),
       });
 
       if (res.ok) {
@@ -151,7 +151,7 @@ export function AuthProvider({ children }) {
       email,
       password,
       options: {
-        data: { full_name: fullName, phone, role: 'customer' },
+        data: { full_name: fullName, phone, role, specialization },
       },
     });
 
@@ -172,16 +172,27 @@ export function AuthProvider({ children }) {
           full_name: fullName,
           email,
           phone,
-          role: 'customer',
+          role: role || 'customer',
         });
 
-        await supabase.from('customers').insert({
-          user_id: data.user.id,
-          full_name: fullName,
-          email,
-          phone,
-          address,
-        });
+        if (role === 'technician') {
+          await supabase.from('technicians').insert({
+            user_id: data.user.id,
+            full_name: fullName,
+            email,
+            phone,
+            specialization: specialization || 'Hardware & Micro-soldering Specialist',
+            status: 'active',
+          });
+        } else {
+          await supabase.from('customers').insert({
+            user_id: data.user.id,
+            full_name: fullName,
+            email,
+            phone,
+            address,
+          });
+        }
       } catch (e) {
         console.warn('Profile table insert warning:', e.message);
       }
