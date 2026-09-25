@@ -363,7 +363,12 @@ export const dataService = {
         .select('*, customers(full_name, phone, email, address), services(service_name, price), technicians(name, specialization)')
         .order('created_at', { ascending: false });
       if (!error && data && data.length > 0) {
-        return data;
+        return data.map((r) => ({
+          ...r,
+          technicians: r.technicians
+            ? { ...r.technicians, full_name: r.technicians.name || r.technicians.full_name }
+            : null,
+        }));
       }
     } catch (e) {}
     const local = getStorage(KEYS.REPAIRS, SEED_REPAIRS);
@@ -379,7 +384,12 @@ export const dataService = {
         .or(`id.eq.${idOrRepairId},repair_id.eq.${idOrRepairId}`)
         .maybeSingle();
       if (!error && data) {
-        return data;
+        return {
+          ...data,
+          technicians: data.technicians
+            ? { ...data.technicians, full_name: data.technicians.name || data.technicians.full_name }
+            : null,
+        };
       }
     } catch (e) {}
 
@@ -391,13 +401,19 @@ export const dataService = {
   async getRepairsByCustomer(userOrEmailOrCustId) {
     const all = await this.getRepairs();
     if (!userOrEmailOrCustId) return all;
+    const target = userOrEmailOrCustId.toLowerCase().trim();
+
     return all.filter((r) => {
       const cust = r.customers;
+      const custEmail = (cust?.email || '').toLowerCase().trim();
+      const isDemo = target === 'customer@smarthub.com' && (!custEmail || custEmail.includes('customer') || custEmail.includes('smarthub'));
+
       return (
         r.customer_id === userOrEmailOrCustId ||
         cust?.id === userOrEmailOrCustId ||
-        cust?.email?.toLowerCase() === userOrEmailOrCustId?.toLowerCase() ||
-        cust?.user_id === userOrEmailOrCustId
+        cust?.user_id === userOrEmailOrCustId ||
+        custEmail === target ||
+        isDemo
       );
     });
   },
@@ -405,14 +421,18 @@ export const dataService = {
   async getRepairsByTechnician(techIdOrEmail) {
     const all = await this.getRepairs();
     if (!techIdOrEmail) return all;
+    const target = techIdOrEmail.toLowerCase().trim();
+
     return all.filter((r) => {
       const tech = r.technicians;
+      const techEmail = (tech?.email || '').toLowerCase().trim();
+
       return (
         r.technician_id === techIdOrEmail ||
         tech?.id === techIdOrEmail ||
-        tech?.email?.toLowerCase() === techIdOrEmail?.toLowerCase() ||
         tech?.user_id === techIdOrEmail ||
-        techIdOrEmail === 'tech@smarthub.com' // Map default demo tech
+        techEmail === target ||
+        target === 'tech@smarthub.com' // Map default demo tech
       );
     });
   },
@@ -420,35 +440,72 @@ export const dataService = {
   async createRepair(repairData) {
     initStore();
     const repairId = repairData.repair_id || generateRepairId();
-    const newRecord = {
-      id: 'rep-' + Date.now(),
-      ...repairData,
+    const isUUID = (str) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
+
+    const dbPayload = {
       repair_id: repairId,
+      device_type: repairData.device_type,
+      brand: repairData.brand,
+      model: repairData.model,
+      serial_number: repairData.serial_number || null,
+      problem: repairData.problem,
+      diagnosis: repairData.diagnosis || null,
       status: repairData.status || 'request_received',
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
+      preferred_date: repairData.preferred_date || null,
+      preferred_time: repairData.preferred_time || null,
+      estimated_completion: repairData.estimated_completion || null,
+      additional_notes: repairData.additional_notes || null,
     };
 
-    // Try Supabase insert
+    if (isUUID(repairData.customer_id)) dbPayload.customer_id = repairData.customer_id;
+    if (isUUID(repairData.service_id)) dbPayload.service_id = repairData.service_id;
+    if (isUUID(repairData.technician_id)) dbPayload.technician_id = repairData.technician_id;
+
+    let createdRecord = null;
     try {
-      const { data, error } = await supabase.from('repairs').insert(newRecord).select().maybeSingle();
+      const { data, error } = await supabase
+        .from('repairs')
+        .insert(dbPayload)
+        .select('*, customers(full_name, phone, email, address), services(service_name, price), technicians(name, specialization)')
+        .maybeSingle();
+
       if (!error && data) {
-        newRecord.id = data.id;
+        createdRecord = {
+          ...data,
+          technicians: data.technicians
+            ? { ...data.technicians, full_name: data.technicians.name || data.technicians.full_name }
+            : null,
+        };
+      } else if (error) {
+        console.warn('Supabase createRepair notice:', error);
       }
-    } catch (e) {}
+    } catch (e) {
+      console.warn('Supabase createRepair error:', e);
+    }
+
+    if (!createdRecord) {
+      createdRecord = {
+        id: (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : 'rep-' + Date.now()),
+        ...repairData,
+        repair_id: repairId,
+        status: repairData.status || 'request_received',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+    }
 
     // Save locally
     const current = getStorage(KEYS.REPAIRS, SEED_REPAIRS);
-    const updated = [newRecord, ...current];
+    const updated = [createdRecord, ...current];
     setStorage(KEYS.REPAIRS, updated);
 
-    return enrichRepair(newRecord);
+    return enrichRepair(createdRecord);
   },
 
   async updateRepair(id, updates) {
     initStore();
     try {
-      await supabase.from('repairs').update(updates).eq('id', id);
+      await supabase.from('repairs').update(updates).or(`id.eq.${id},repair_id.eq.${id}`);
     } catch (e) {}
 
     const current = getStorage(KEYS.REPAIRS, SEED_REPAIRS);
@@ -464,7 +521,7 @@ export const dataService = {
   async deleteRepair(id) {
     initStore();
     try {
-      await supabase.from('repairs').delete().eq('id', id);
+      await supabase.from('repairs').delete().or(`id.eq.${id},repair_id.eq.${id}`);
     } catch (e) {}
 
     const current = getStorage(KEYS.REPAIRS, SEED_REPAIRS);
@@ -481,7 +538,14 @@ export const dataService = {
         .select('*, repairs(repair_id, device_type, brand, model, customer_id, customers(full_name, email, phone))')
         .order('invoice_date', { ascending: false });
       if (!error && data && data.length > 0) {
-        return data;
+        return data.map((inv) => {
+          const rep = inv.repairs || inv.repair;
+          return {
+            ...inv,
+            repairs: rep,
+            repair: rep,
+          };
+        });
       }
     } catch (e) {}
 
@@ -512,29 +576,63 @@ export const dataService = {
 
   async createInvoice(invoiceData) {
     initStore();
+    const isUUID = (str) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
     const invNumber = invoiceData.invoice_number || `INV-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
-    const newInv = {
-      id: 'inv-' + Date.now(),
-      ...invoiceData,
+
+    const dbPayload = {
       invoice_number: invNumber,
+      service_charge: Number(invoiceData.service_charge) || 0,
+      parts_cost: Number(invoiceData.parts_cost) || 0,
+      labour_charge: Number(invoiceData.labour_charge) || 0,
+      discount: Number(invoiceData.discount) || 0,
+      total_amount: Number(invoiceData.total_amount) || 0,
       payment_status: invoiceData.payment_status || 'unpaid',
       payment_method: invoiceData.payment_method || 'Razorpay',
-      invoice_date: new Date().toISOString(),
     };
 
+    if (isUUID(invoiceData.repair_id)) {
+      dbPayload.repair_id = invoiceData.repair_id;
+    }
+
+    let created = null;
     try {
-      await supabase.from('invoices').insert(newInv);
-    } catch (e) {}
+      const { data, error } = await supabase
+        .from('invoices')
+        .insert(dbPayload)
+        .select('*, repairs(repair_id, device_type, brand, model, customer_id, customers(full_name, email, phone))')
+        .maybeSingle();
+
+      if (!error && data) {
+        created = {
+          ...data,
+          repairs: data.repairs,
+          repair: data.repairs,
+        };
+      }
+    } catch (e) {
+      console.warn('Supabase createInvoice error:', e);
+    }
+
+    if (!created) {
+      created = {
+        id: (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : 'inv-' + Date.now()),
+        ...invoiceData,
+        invoice_number: invNumber,
+        payment_status: invoiceData.payment_status || 'unpaid',
+        payment_method: invoiceData.payment_method || 'Razorpay',
+        invoice_date: new Date().toISOString(),
+      };
+    }
 
     const current = getStorage(KEYS.INVOICES, SEED_INVOICES);
-    setStorage(KEYS.INVOICES, [newInv, ...current]);
-    return newInv;
+    setStorage(KEYS.INVOICES, [created, ...current]);
+    return created;
   },
 
   async updateInvoice(id, updates) {
     initStore();
     try {
-      await supabase.from('invoices').update(updates).eq('id', id);
+      await supabase.from('invoices').update(updates).or(`id.eq.${id},invoice_number.eq.${id}`);
     } catch (e) {}
 
     const current = getStorage(KEYS.INVOICES, SEED_INVOICES);
@@ -578,14 +676,18 @@ export const dataService = {
       setStorage(KEYS.SERVICES, updated);
       return serviceData;
     } else {
+      const isUUID = (str) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
       const newService = {
-        id: 'srv-' + Date.now(),
         ...serviceData,
         created_at: new Date().toISOString(),
       };
       try {
-        await supabase.from('services').insert(newService);
+        const payload = { ...serviceData };
+        if (!isUUID(payload.id)) delete payload.id;
+        const { data } = await supabase.from('services').insert(payload).select().maybeSingle();
+        if (data) newService.id = data.id;
       } catch (e) {}
+      if (!newService.id) newService.id = (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : 'srv-' + Date.now());
       setStorage(KEYS.SERVICES, [newService, ...current]);
       return newService;
     }
@@ -605,38 +707,60 @@ export const dataService = {
     initStore();
     try {
       const { data, error } = await supabase.from('technicians').select('*, repairs(id)').order('created_at', { ascending: false });
-      if (!error && data && data.length > 0) return data;
+      if (!error && data && data.length > 0) {
+        return data.map((t) => ({
+          ...t,
+          full_name: t.name || t.full_name,
+        }));
+      }
     } catch (e) {}
     const local = getStorage(KEYS.TECHNICIANS, SEED_TECHNICIANS);
     const repairs = getStorage(KEYS.REPAIRS, SEED_REPAIRS);
     return local.map((t) => ({
       ...t,
+      full_name: t.name || t.full_name,
       repairs: repairs.filter((r) => r.technician_id === t.id),
     }));
   },
 
   async saveTechnician(techData) {
     initStore();
-    const current = getStorage(KEYS.TECHNICIANS, SEED_TECHNICIANS);
-    if (techData.id && current.some((t) => t.id === techData.id)) {
+    const isUUID = (str) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
+    const dbPayload = {
+      name: techData.name || techData.full_name,
+      email: techData.email?.toLowerCase().trim(),
+      phone: techData.phone || '',
+      specialization: techData.specialization || '',
+      experience: Number(techData.experience) || 0,
+      availability: techData.availability || 'available',
+    };
+    if (isUUID(techData.user_id)) dbPayload.user_id = techData.user_id;
+
+    let saved = null;
+    if (techData.id && isUUID(techData.id)) {
       try {
-        await supabase.from('technicians').update(techData).eq('id', techData.id);
+        const { data } = await supabase.from('technicians').update(dbPayload).eq('id', techData.id).select().maybeSingle();
+        if (data) saved = data;
       } catch (e) {}
-      const updated = current.map((t) => (t.id === techData.id ? { ...t, ...techData } : t));
-      setStorage(KEYS.TECHNICIANS, updated);
-      return techData;
     } else {
-      const newTech = {
-        id: 'tech-' + Date.now(),
+      try {
+        const { data } = await supabase.from('technicians').insert(dbPayload).select().maybeSingle();
+        if (data) saved = data;
+      } catch (e) {}
+    }
+
+    if (!saved) {
+      saved = {
+        id: techData.id && isUUID(techData.id) ? techData.id : (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : 'tech-' + Date.now()),
         ...techData,
         created_at: new Date().toISOString(),
       };
-      try {
-        await supabase.from('technicians').insert(newTech);
-      } catch (e) {}
-      setStorage(KEYS.TECHNICIANS, [newTech, ...current]);
-      return newTech;
     }
+
+    const current = getStorage(KEYS.TECHNICIANS, SEED_TECHNICIANS);
+    const updated = [saved, ...current.filter((t) => t.id !== saved.id)];
+    setStorage(KEYS.TECHNICIANS, updated);
+    return { ...saved, full_name: saved.name || saved.full_name };
   },
 
   async deleteTechnician(id) {
@@ -665,26 +789,41 @@ export const dataService = {
 
   async saveCustomer(custData) {
     initStore();
-    const current = getStorage(KEYS.CUSTOMERS, SEED_CUSTOMERS);
-    if (custData.id && current.some((c) => c.id === custData.id)) {
+    const isUUID = (str) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
+
+    const dbPayload = {
+      full_name: custData.full_name,
+      email: custData.email?.toLowerCase().trim(),
+      phone: custData.phone || '',
+      address: custData.address || '',
+    };
+    if (isUUID(custData.user_id)) dbPayload.user_id = custData.user_id;
+
+    let saved = null;
+    if (custData.id && isUUID(custData.id)) {
       try {
-        await supabase.from('customers').update(custData).eq('id', custData.id);
+        const { data } = await supabase.from('customers').update(dbPayload).eq('id', custData.id).select().maybeSingle();
+        if (data) saved = data;
       } catch (e) {}
-      const updated = current.map((c) => (c.id === custData.id ? { ...c, ...custData } : c));
-      setStorage(KEYS.CUSTOMERS, updated);
-      return custData;
     } else {
-      const newCust = {
-        id: 'cust-' + Date.now(),
+      try {
+        const { data } = await supabase.from('customers').insert(dbPayload).select().maybeSingle();
+        if (data) saved = data;
+      } catch (e) {}
+    }
+
+    if (!saved) {
+      saved = {
+        id: custData.id && isUUID(custData.id) ? custData.id : (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : 'cust-' + Date.now()),
         ...custData,
         created_at: new Date().toISOString(),
       };
-      try {
-        await supabase.from('customers').insert(newCust);
-      } catch (e) {}
-      setStorage(KEYS.CUSTOMERS, [newCust, ...current]);
-      return newCust;
     }
+
+    const current = getStorage(KEYS.CUSTOMERS, SEED_CUSTOMERS);
+    const updated = [saved, ...current.filter((c) => c.id !== saved.id && c.email !== saved.email)];
+    setStorage(KEYS.CUSTOMERS, updated);
+    return saved;
   },
 
   async deleteCustomer(id) {
@@ -708,26 +847,41 @@ export const dataService = {
 
   async saveSparePart(partData) {
     initStore();
-    const current = getStorage(KEYS.PARTS, SEED_PARTS);
-    if (partData.id && current.some((p) => p.id === partData.id)) {
+    const isUUID = (str) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
+    const dbPayload = {
+      part_name: partData.part_name,
+      category: partData.category || '',
+      quantity: Number(partData.quantity) || 0,
+      price: Number(partData.price) || 0,
+      supplier: partData.supplier || '',
+      min_stock: Number(partData.min_stock) || 5,
+    };
+
+    let saved = null;
+    if (partData.id && isUUID(partData.id)) {
       try {
-        await supabase.from('spare_parts').update(partData).eq('id', partData.id);
+        const { data } = await supabase.from('spare_parts').update(dbPayload).eq('id', partData.id).select().maybeSingle();
+        if (data) saved = data;
       } catch (e) {}
-      const updated = current.map((p) => (p.id === partData.id ? { ...p, ...partData } : p));
-      setStorage(KEYS.PARTS, updated);
-      return partData;
     } else {
-      const newPart = {
-        id: 'part-' + Date.now(),
+      try {
+        const { data } = await supabase.from('spare_parts').insert(dbPayload).select().maybeSingle();
+        if (data) saved = data;
+      } catch (e) {}
+    }
+
+    if (!saved) {
+      saved = {
+        id: partData.id && isUUID(partData.id) ? partData.id : (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : 'part-' + Date.now()),
         ...partData,
         created_at: new Date().toISOString(),
       };
-      try {
-        await supabase.from('spare_parts').insert(newPart);
-      } catch (e) {}
-      setStorage(KEYS.PARTS, [newPart, ...current]);
-      return newPart;
     }
+
+    const current = getStorage(KEYS.PARTS, SEED_PARTS);
+    const updated = [saved, ...current.filter((p) => p.id !== saved.id)];
+    setStorage(KEYS.PARTS, updated);
+    return saved;
   },
 
   async deleteSparePart(id) {

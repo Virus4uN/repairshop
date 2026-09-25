@@ -14,6 +14,8 @@ export default function CustomerInvoices() {
   const [filter, setFilter] = useState('all'); // all, unpaid, paid
   const [payingId, setPayingId] = useState(null);
 
+  const [generatingDemo, setGeneratingDemo] = useState(false);
+
   useEffect(() => {
     fetchInvoices();
   }, [profile]);
@@ -21,15 +23,27 @@ export default function CustomerInvoices() {
   const fetchInvoices = async () => {
     try {
       const allInvoices = await dataService.getInvoices();
+      const userEmail = (profile?.email || '').toLowerCase().trim();
+
       // Filter for current customer
       const myInvoices = allInvoices.filter((inv) => {
-        const custEmail = inv.repairs?.customers?.email || inv.repair?.customers?.email;
+        if (!profile || profile.role === 'admin') return true;
+
+        const custEmail = (
+          inv.repairs?.customers?.email ||
+          inv.repair?.customers?.email ||
+          inv.customer_email ||
+          ''
+        ).toLowerCase().trim();
+
         const custId = inv.repairs?.customer_id || inv.repair?.customer_id;
+        const custUserId = inv.repairs?.customers?.user_id || inv.repair?.customers?.user_id;
+
         return (
-          !profile ||
-          custEmail?.toLowerCase() === profile.email?.toLowerCase() ||
-          custId === profile.id ||
-          profile.role === 'admin'
+          custEmail === userEmail ||
+          custId === profile?.id ||
+          custUserId === profile?.id ||
+          (userEmail === 'customer@smarthub.com' && (custEmail.includes('customer') || custEmail.includes('smarthub') || !custEmail))
         );
       });
       setInvoices(myInvoices);
@@ -37,6 +51,53 @@ export default function CustomerInvoices() {
       console.error('Invoice fetch error:', err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleCreateDemoInvoice = async () => {
+    setGeneratingDemo(true);
+    try {
+      // 1. Ensure customer record exists in Supabase
+      const cust = await dataService.saveCustomer({
+        user_id: profile?.id || null,
+        full_name: profile?.full_name || 'Customer',
+        email: profile?.email || 'customer@smarthub.com',
+        phone: profile?.phone || '+91 98765 43210',
+        address: 'Standard Service Address',
+      });
+
+      // 2. Create test repair ticket
+      const randomSuffix = Math.floor(1000 + Math.random() * 9000);
+      const rep = await dataService.createRepair({
+        repair_id: `SHR-${new Date().getFullYear()}-${randomSuffix}`,
+        customer_id: cust.id,
+        device_type: 'Mobile Phone',
+        brand: 'Apple',
+        model: 'iPhone 15 Pro',
+        problem: 'Display cracked and battery health check',
+        status: 'ready_for_pickup',
+        estimated_completion: new Date().toISOString().split('T')[0],
+      });
+
+      // 3. Create unpaid invoice in Supabase Cloud
+      await dataService.createInvoice({
+        invoice_number: `INV-${new Date().getFullYear()}-${randomSuffix}`,
+        repair_id: rep.id,
+        service_charge: 299,
+        parts_cost: 400,
+        labour_charge: 100,
+        discount: 50,
+        total_amount: 749,
+        payment_status: 'unpaid',
+        payment_method: 'Razorpay',
+      });
+
+      toast.success('Sample test invoice generated! You can now test paying via Razorpay.');
+      fetchInvoices();
+    } catch (err) {
+      toast.error('Failed to create test invoice: ' + err.message);
+    } finally {
+      setGeneratingDemo(false);
     }
   };
 
@@ -97,32 +158,67 @@ export default function CustomerInvoices() {
       </div>
 
       {/* Filter Tabs */}
-      <div className="flex gap-2 border-b border-gray-100 pb-2">
-        {[
-          { id: 'all', label: `All Invoices (${invoices.length})` },
-          { id: 'unpaid', label: `Unpaid (${unpaidCount})` },
-          { id: 'paid', label: `Paid (${invoices.length - unpaidCount})` },
-        ].map((tab) => (
-          <button
-            key={tab.id}
-            onClick={() => setFilter(tab.id)}
-            className={`px-4 py-2 text-xs font-bold rounded-xl transition-all cursor-pointer ${
-              filter === tab.id
-                ? 'bg-blue-600 text-white shadow-sm'
-                : 'text-gray-600 hover:bg-gray-100'
-            }`}
-          >
-            {tab.label}
-          </button>
-        ))}
+      <div className="flex items-center justify-between gap-2 border-b border-gray-100 pb-2 flex-wrap">
+        <div className="flex gap-2">
+          {[
+            { id: 'all', label: `All Invoices (${invoices.length})` },
+            { id: 'unpaid', label: `Unpaid (${unpaidCount})` },
+            { id: 'paid', label: `Paid (${invoices.length - unpaidCount})` },
+          ].map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => setFilter(tab.id)}
+              className={`px-4 py-2 text-xs font-bold rounded-xl transition-all cursor-pointer ${
+                filter === tab.id
+                  ? 'bg-blue-600 text-white shadow-sm'
+                  : 'text-gray-600 hover:bg-gray-100'
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Quick Test Invoice Generator Button */}
+        <button
+          type="button"
+          disabled={generatingDemo}
+          onClick={handleCreateDemoInvoice}
+          className="text-xs font-bold px-3 py-1.5 rounded-xl bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200 flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-50"
+        >
+          {generatingDemo ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : '⚡ Generate Test Invoice (₹749)'}
+        </button>
       </div>
 
       {/* Invoices List */}
       {filteredInvoices.length === 0 ? (
-        <div className="bg-white rounded-2xl p-12 text-center border border-gray-100 shadow-sm">
-          <Receipt className="w-12 h-12 text-gray-300 mx-auto mb-3" />
-          <p className="text-gray-500 font-medium">No invoices found</p>
-          <p className="text-gray-400 text-xs mt-1">Invoices appear here as soon as repairs are billed.</p>
+        <div className="bg-white rounded-3xl p-10 text-center border border-gray-100 shadow-sm max-w-xl mx-auto space-y-4">
+          <div className="w-16 h-16 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center mx-auto shadow-sm">
+            <Receipt className="w-8 h-8" />
+          </div>
+          <div>
+            <h3 className="text-base font-bold text-gray-900">No Invoices on this Account Yet</h3>
+            <p className="text-gray-500 text-xs sm:text-sm mt-1 max-w-md mx-auto">
+              Invoices are automatically issued here when you book a repair and our lab completes diagnosis.
+            </p>
+          </div>
+
+          <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-2">
+            <button
+              type="button"
+              disabled={generatingDemo}
+              onClick={handleCreateDemoInvoice}
+              className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white text-xs font-bold shadow-md shadow-blue-500/20 flex items-center justify-center gap-1.5 cursor-pointer transition-all disabled:opacity-50"
+            >
+              {generatingDemo ? <Loader2 className="w-4 h-4 animate-spin" /> : '⚡ Create Test Invoice to Try Razorpay'}
+            </button>
+            <a
+              href="/customer/book-repair"
+              className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-gray-50 hover:bg-gray-100 text-gray-700 text-xs font-semibold border border-gray-200 transition-colors"
+            >
+              Book a New Repair Ticket
+            </a>
+          </div>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

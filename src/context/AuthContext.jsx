@@ -38,7 +38,7 @@ export function AuthProvider({ children }) {
         setProfile(null);
         try {
           localStorage.removeItem('smarthub_user_profile');
-        } catch (e) {}
+        } catch (e) { }
         setLoading(false);
       }
     });
@@ -81,7 +81,7 @@ export function AuthProvider({ children }) {
       setProfile(finalProfile);
       try {
         localStorage.setItem('smarthub_user_profile', JSON.stringify(finalProfile));
-      } catch (e) {}
+      } catch (e) { }
       return finalProfile;
     } catch (err) {
       console.warn('Profile fetch notice:', err.message);
@@ -103,7 +103,7 @@ export function AuthProvider({ children }) {
       setProfile(fallbackProfile);
       try {
         localStorage.setItem('smarthub_user_profile', JSON.stringify(fallbackProfile));
-      } catch (e) {}
+      } catch (e) { }
       return fallbackProfile;
     } finally {
       setLoading(false);
