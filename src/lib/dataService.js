@@ -1,5 +1,5 @@
-import { supabase } from './supabase';
-import { generateRepairId, DEFAULT_SERVICES } from './helpers';
+import { supabase } from './supabase.js';
+import { generateRepairId, DEFAULT_SERVICES } from './helpers.js';
 
 // Storage keys
 const KEYS = {
