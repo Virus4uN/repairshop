@@ -31,9 +31,17 @@ export default function LoginPage() {
     try {
       const res = await signIn({ email, password });
       toast.success('Welcome back!');
-      const role = res?.profile?.role || (email.toLowerCase() === 'sc7348509580@gmail.com' ? 'admin' : 'customer');
+      const cleanEmail = email.toLowerCase().trim();
+      const role =
+        res?.profile?.role ||
+        (cleanEmail === 'sc7348509580@gmail.com'
+          ? 'admin'
+          : cleanEmail === 'tech@smarthub.com' || cleanEmail.includes('tech@')
+          ? 'technician'
+          : 'customer');
+
       if (role === 'admin') {
-        navigate('/admin', { replace: true });
+        navigate('/admin/dashboard', { replace: true });
       } else if (role === 'technician') {
         navigate('/technician/dashboard', { replace: true });
       } else {
@@ -105,8 +113,25 @@ export default function LoginPage() {
       if (res.ok) {
         const json = await res.json();
         toast.success('OTP verified successfully!');
-        const role = json.user?.role || (email.toLowerCase() === 'sc7348509580@gmail.com' ? 'admin' : 'customer');
-        if (role === 'admin') navigate('/admin', { replace: true });
+        const cleanEmail = email.toLowerCase().trim();
+        const role =
+          json.user?.role ||
+          (cleanEmail === 'sc7348509580@gmail.com'
+            ? 'admin'
+            : cleanEmail === 'tech@smarthub.com' || cleanEmail.includes('tech@')
+            ? 'technician'
+            : 'customer');
+
+        if (json.hashedToken) {
+          try {
+            await supabase.auth.verifyOtp({
+              token_hash: json.hashedToken,
+              type: 'magiclink',
+            });
+          } catch (e) {}
+        }
+
+        if (role === 'admin') navigate('/admin/dashboard', { replace: true });
         else if (role === 'technician') navigate('/technician/dashboard', { replace: true });
         else navigate('/customer/dashboard', { replace: true });
         return;
@@ -124,8 +149,16 @@ export default function LoginPage() {
       if (data?.user) {
         toast.success('Email verified successfully!');
         const prof = await fetchProfile(data.user.id, data.user);
-        const role = prof?.role || (email.toLowerCase() === 'sc7348509580@gmail.com' ? 'admin' : 'customer');
-        if (role === 'admin') navigate('/admin', { replace: true });
+        const cleanEmail = email.toLowerCase().trim();
+        const role =
+          prof?.role ||
+          (cleanEmail === 'sc7348509580@gmail.com'
+            ? 'admin'
+            : cleanEmail === 'tech@smarthub.com' || cleanEmail.includes('tech@')
+            ? 'technician'
+            : 'customer');
+
+        if (role === 'admin') navigate('/admin/dashboard', { replace: true });
         else if (role === 'technician') navigate('/technician/dashboard', { replace: true });
         else navigate('/customer/dashboard', { replace: true });
       }

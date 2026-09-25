@@ -7,7 +7,14 @@ export const useAuth = () => useContext(AuthContext);
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
-  const [profile, setProfile] = useState(null);
+  const [profile, setProfile] = useState(() => {
+    try {
+      const cached = localStorage.getItem('smarthub_user_profile');
+      return cached ? JSON.parse(cached) : null;
+    } catch {
+      return null;
+    }
+  });
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -15,7 +22,7 @@ export function AuthProvider({ children }) {
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session?.user) {
         setUser(session.user);
-        fetchProfile(session.user.id);
+        fetchProfile(session.user.id, session.user);
       } else {
         setLoading(false);
       }
@@ -25,10 +32,13 @@ export function AuthProvider({ children }) {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       if (session?.user) {
         setUser(session.user);
-        fetchProfile(session.user.id);
+        fetchProfile(session.user.id, session.user);
       } else {
         setUser(null);
         setProfile(null);
+        try {
+          localStorage.removeItem('smarthub_user_profile');
+        } catch (e) {}
         setLoading(false);
       }
     });
@@ -38,43 +48,62 @@ export function AuthProvider({ children }) {
 
   const fetchProfile = async (userId, authUser = null) => {
     try {
-      const { data, error } = await supabase
+      const { data } = await supabase
         .from('users')
         .select('*')
         .eq('id', userId)
-        .single();
+        .maybeSingle();
 
-      if (error || !data) {
-        const email = authUser?.email || user?.email;
-        const meta = authUser?.user_metadata || user?.user_metadata || {};
-        const isAdmin = email?.toLowerCase() === 'sc7348509580@gmail.com' || meta.role === 'admin';
-        const role = isAdmin ? 'admin' : (meta.role || 'customer');
-        const fallbackProfile = {
-          id: userId,
-          email: email,
-          full_name: meta.full_name || email?.split('@')[0] || 'User',
-          role: role,
-          phone: meta.phone || ''
-        };
-        setProfile(fallbackProfile);
-        return fallbackProfile;
+      const email = authUser?.email || user?.email || data?.email || '';
+      const meta = authUser?.user_metadata || user?.user_metadata || {};
+      const cleanEmail = email.toLowerCase().trim();
+
+      // Strict deterministic role resolution
+      let resolvedRole = data?.role || meta.role;
+      if (cleanEmail === 'sc7348509580@gmail.com') {
+        resolvedRole = 'admin';
+      } else if (cleanEmail === 'tech@smarthub.com' || cleanEmail.includes('tech@') || resolvedRole === 'technician') {
+        resolvedRole = 'technician';
+      } else if (resolvedRole === 'admin') {
+        resolvedRole = 'admin';
+      } else {
+        resolvedRole = 'customer';
       }
-      setProfile(data);
-      return data;
+
+      const finalProfile = {
+        id: userId,
+        email: cleanEmail,
+        full_name: data?.full_name || meta.full_name || cleanEmail.split('@')[0] || 'User',
+        role: resolvedRole,
+        phone: data?.phone || meta.phone || '',
+      };
+
+      setProfile(finalProfile);
+      try {
+        localStorage.setItem('smarthub_user_profile', JSON.stringify(finalProfile));
+      } catch (e) {}
+      return finalProfile;
     } catch (err) {
       console.warn('Profile fetch notice:', err.message);
-      const email = authUser?.email || user?.email;
+      const email = authUser?.email || user?.email || '';
       const meta = authUser?.user_metadata || user?.user_metadata || {};
-      const isAdmin = email?.toLowerCase() === 'sc7348509580@gmail.com' || meta.role === 'admin';
-      const role = isAdmin ? 'admin' : (meta.role || 'customer');
+      const cleanEmail = email.toLowerCase().trim();
+
+      let resolvedRole = 'customer';
+      if (cleanEmail === 'sc7348509580@gmail.com' || meta.role === 'admin') resolvedRole = 'admin';
+      else if (cleanEmail === 'tech@smarthub.com' || cleanEmail.includes('tech@') || meta.role === 'technician') resolvedRole = 'technician';
+
       const fallbackProfile = {
         id: userId,
-        email: email,
-        full_name: meta.full_name || email?.split('@')[0] || 'User',
-        role: role,
-        phone: meta.phone || ''
+        email: cleanEmail,
+        full_name: meta.full_name || cleanEmail.split('@')[0] || 'User',
+        role: resolvedRole,
+        phone: meta.phone || '',
       };
       setProfile(fallbackProfile);
+      try {
+        localStorage.setItem('smarthub_user_profile', JSON.stringify(fallbackProfile));
+      } catch (e) {}
       return fallbackProfile;
     } finally {
       setLoading(false);
