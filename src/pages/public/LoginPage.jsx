@@ -54,6 +54,20 @@ export default function LoginPage() {
     }
     setOtpLoading(true);
     try {
+      // 1. Try direct Gmail SMTP via serverless route
+      const res = await fetch('/api/send-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: email.trim() }),
+      });
+
+      if (res.ok) {
+        setOtpSent(true);
+        toast.success(`Verification code sent to ${email}! Check your Gmail inbox.`);
+        return;
+      }
+
+      // 2. Fallback to Supabase OTP
       const { data, error } = await supabase.auth.signInWithOtp({
         email: email.trim(),
         options: {
@@ -61,15 +75,13 @@ export default function LoginPage() {
         },
       });
 
-      if (error) {
-        throw error;
-      }
+      if (error) throw error;
 
       setOtpSent(true);
       toast.success(`Verification code sent to ${email}! Check your inbox.`);
     } catch (err) {
       console.error('OTP error:', err);
-      toast.error(err.message || 'Failed to send OTP. Please check Supabase SMTP settings.');
+      toast.error(err.message || 'Failed to send OTP.');
     } finally {
       setOtpLoading(false);
     }
@@ -83,6 +95,24 @@ export default function LoginPage() {
     }
     setOtpLoading(true);
     try {
+      // 1. Try serverless verification route
+      const res = await fetch('/api/verify-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: email.trim(), otp: otp.trim() }),
+      });
+
+      if (res.ok) {
+        const json = await res.json();
+        toast.success('OTP verified successfully!');
+        const role = json.user?.role || (email.toLowerCase() === 'sc7348509580@gmail.com' ? 'admin' : 'customer');
+        if (role === 'admin') navigate('/admin', { replace: true });
+        else if (role === 'technician') navigate('/technician/dashboard', { replace: true });
+        else navigate('/customer/dashboard', { replace: true });
+        return;
+      }
+
+      // 2. Fallback to Supabase verifyOtp
       const { data, error } = await supabase.auth.verifyOtp({
         email: email.trim(),
         token: otp.trim(),

@@ -82,6 +82,42 @@ export function AuthProvider({ children }) {
   };
 
   const signUp = async ({ email, password, fullName, phone, address }) => {
+    // 1. Try serverless instant registration first (pre-confirms email and avoids SMTP failure)
+    try {
+      const res = await fetch('/api/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password, fullName, phone, address }),
+      });
+
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success) {
+          // Immediately sign in with the password!
+          const { data: signData, error: signErr } = await supabase.auth.signInWithPassword({
+            email,
+            password,
+          });
+          if (!signErr && signData?.user) {
+            setUser(signData.user);
+            const prof = await fetchProfile(signData.user.id, signData.user);
+            return { user: signData.user, profile: prof, instantLogin: true };
+          }
+          return { user: json.user, instantLogin: false };
+        }
+      } else {
+        const errJson = await res.json().catch(() => ({}));
+        if (errJson.error && !errJson.error.includes('404') && !errJson.error.includes('Not Found')) {
+          throw new Error(errJson.error);
+        }
+      }
+    } catch (e) {
+      if (e.message && !e.message.includes('fetch') && !e.message.includes('Failed to fetch')) {
+        throw e;
+      }
+    }
+
+    // 2. Direct Supabase signUp fallback
     const { data, error } = await supabase.auth.signUp({
       email,
       password,
@@ -90,7 +126,14 @@ export function AuthProvider({ children }) {
       },
     });
 
-    if (error) throw error;
+    if (error) {
+      if (error.message?.includes('confirmation email')) {
+        throw new Error(
+          'Email Confirmation Notice: In Supabase Dashboard > Authentication > Providers > Email, turn OFF "Confirm email" to enable instant registration.'
+        );
+      }
+      throw error;
+    }
 
     // Create user profile if table exists
     if (data.user) {
@@ -103,7 +146,6 @@ export function AuthProvider({ children }) {
           role: 'customer',
         });
 
-        // Create customer record
         await supabase.from('customers').insert({
           user_id: data.user.id,
           full_name: fullName,

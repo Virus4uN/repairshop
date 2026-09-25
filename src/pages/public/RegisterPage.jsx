@@ -25,15 +25,20 @@ export default function RegisterPage() {
     }
     setLoading(true);
     try {
-      await signUp({
+      const res = await signUp({
         email: form.email,
         password: form.password,
         fullName: form.fullName,
         phone: form.phone,
         address: form.address,
       });
-      toast.success('Account created! Please check your email to verify.');
-      navigate('/login');
+      if (res?.instantLogin) {
+        toast.success('Account created & signed in successfully!');
+        navigate('/customer/dashboard', { replace: true });
+      } else {
+        toast.success('Account created successfully! Please sign in.');
+        navigate('/login');
+      }
     } catch (err) {
       toast.error(err.message || 'Registration failed');
     } finally {
