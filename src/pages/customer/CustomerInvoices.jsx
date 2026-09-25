@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
-import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../context/AuthContext';
+import { dataService } from '../../lib/dataService';
 import { Receipt, CreditCard, Check, Clock, Download, ArrowUpRight, Search, Loader2 } from 'lucide-react';
 import { formatCurrency, formatDate } from '../../lib/helpers';
 import LoadingSpinner from '../../components/common/LoadingSpinner';
@@ -19,87 +19,46 @@ export default function CustomerInvoices() {
   }, [profile]);
 
   const fetchInvoices = async () => {
-    if (!profile) return;
     try {
-      // Find customer ID
-      const { data: customer } = await supabase
-        .from('customers')
-        .select('id')
-        .eq('user_id', profile.id)
-        .maybeSingle();
-
-      if (!customer) {
-        setLoading(false);
-        return;
-      }
-
-      // Fetch all customer repairs
-      const { data: repairs } = await supabase
-        .from('repairs')
-        .select('id, repair_id, device_type, brand, model')
-        .eq('customer_id', customer.id);
-
-      if (!repairs || repairs.length === 0) {
-        setInvoices([]);
-        setLoading(false);
-        return;
-      }
-
-      const repairIds = repairs.map((r) => r.id);
-
-      // Fetch invoices for these repairs
-      const { data: invs } = await supabase
-        .from('invoices')
-        .select('*')
-        .in('repair_id', repairIds)
-        .order('invoice_date', { ascending: false });
-
-      // Join repair info
-      const enriched = (invs || []).map((inv) => ({
-        ...inv,
-        repair: repairs.find((r) => r.id === inv.repair_id)
-      }));
-
-      setInvoices(enriched);
+      const allInvoices = await dataService.getInvoices();
+      // Filter for current customer
+      const myInvoices = allInvoices.filter((inv) => {
+        const custEmail = inv.repairs?.customers?.email || inv.repair?.customers?.email;
+        const custId = inv.repairs?.customer_id || inv.repair?.customer_id;
+        return (
+          !profile ||
+          custEmail?.toLowerCase() === profile.email?.toLowerCase() ||
+          custId === profile.id ||
+          profile.role === 'admin'
+        );
+      });
+      setInvoices(myInvoices);
     } catch (err) {
-      console.error('Error fetching invoices:', err);
+      console.error('Invoice fetch error:', err);
     } finally {
       setLoading(false);
     }
   };
 
-  const handlePay = async (inv) => {
-    setPayingId(inv.id);
+  const handlePay = async (invoice) => {
+    setPayingId(invoice.id);
     try {
       const response = await initiateRazorpayPayment({
-        amount: inv.total_amount,
-        invoiceNumber: inv.invoice_number,
-        repairId: inv.repair?.repair_id || '',
-        customerName: profile?.full_name || '',
-        customerEmail: profile?.email || '',
-        customerPhone: profile?.phone || '',
+        amount: invoice.total_amount,
+        invoiceNumber: invoice.invoice_number,
+        repairId: invoice.repairs?.repair_id || invoice.repair?.repair_id || 'REPAIR',
+        customerName: profile?.full_name || 'Customer',
+        customerEmail: profile?.email || 'customer@smarthub.com',
+        customerPhone: profile?.phone || '9999999999',
       });
 
-      const updateData = {
-        payment_status: 'paid',
-        payment_method: 'Razorpay',
-        transaction_id: response.razorpay_payment_id,
-        paid_at: new Date().toISOString()
-      };
-
-      try {
-        await supabase.from('invoices').update(updateData).eq('id', inv.id);
-      } catch {
-        await supabase.from('invoices').update({ payment_status: 'paid' }).eq('id', inv.id);
-      }
-
-      toast.success('Payment successful via Razorpay!');
-      setInvoices((prev) =>
-        prev.map((item) => (item.id === inv.id ? { ...item, ...updateData } : item))
-      );
+      // Update in dataService
+      await dataService.markInvoicePaid(invoice.id, response);
+      toast.success(`Payment of ${formatCurrency(invoice.total_amount)} verified via Razorpay!`);
+      fetchInvoices();
     } catch (err) {
-      if (err.message !== 'Payment cancelled by user.') {
-        toast.error(err.message || 'Payment failed');
+      if (err.description || err.message) {
+        toast.error(err.description || err.message);
       }
     } finally {
       setPayingId(null);
@@ -107,60 +66,48 @@ export default function CustomerInvoices() {
   };
 
   const filteredInvoices = invoices.filter((inv) => {
-    if (filter === 'unpaid') return inv.payment_status !== 'paid';
     if (filter === 'paid') return inv.payment_status === 'paid';
+    if (filter === 'unpaid') return inv.payment_status === 'unpaid';
     return true;
   });
 
-  const totalBilled = invoices.reduce((sum, inv) => sum + Number(inv.total_amount || 0), 0);
-  const totalPaid = invoices
-    .filter((inv) => inv.payment_status === 'paid')
-    .reduce((sum, inv) => sum + Number(inv.total_amount || 0), 0);
-  const pendingAmount = totalBilled - totalPaid;
+  const unpaidCount = invoices.filter((i) => i.payment_status === 'unpaid').length;
+  const totalDue = invoices
+    .filter((i) => i.payment_status === 'unpaid')
+    .reduce((sum, i) => sum + (Number(i.total_amount) || 0), 0);
 
   if (loading) return <LoadingSpinner />;
 
   return (
     <div className="space-y-6">
-      {/* Title */}
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Invoices & Payments</h1>
-          <p className="text-sm text-gray-500">Pay bills securely with Razorpay and download receipts</p>
+          <h1 className="text-2xl font-bold text-gray-900">Invoices & Billing</h1>
+          <p className="text-gray-500 text-sm">Review your repair invoices and make payments securely via Razorpay</p>
         </div>
-      </div>
-
-      {/* Summary Stats */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm">
-          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Total Invoiced</p>
-          <p className="text-2xl font-bold text-gray-900">{formatCurrency(totalBilled)}</p>
-          <p className="text-xs text-gray-400 mt-1">{invoices.length} invoices generated</p>
-        </div>
-        <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm">
-          <p className="text-xs font-semibold text-green-600 uppercase tracking-wider mb-1">Total Paid</p>
-          <p className="text-2xl font-bold text-green-600">{formatCurrency(totalPaid)}</p>
-          <p className="text-xs text-gray-400 mt-1">Paid securely online</p>
-        </div>
-        <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm">
-          <p className="text-xs font-semibold text-amber-600 uppercase tracking-wider mb-1">Pending Balance</p>
-          <p className="text-2xl font-bold text-amber-600">{formatCurrency(pendingAmount)}</p>
-          <p className="text-xs text-gray-400 mt-1">Awaiting online payment</p>
-        </div>
+        {unpaidCount > 0 && (
+          <div className="bg-amber-50 border border-amber-200 px-4 py-2 rounded-xl text-xs font-semibold text-amber-900 flex items-center gap-2">
+            <Clock className="w-4 h-4 text-amber-600" />
+            <span>
+              {unpaidCount} Pending Invoice{unpaidCount > 1 ? 's' : ''} ({formatCurrency(totalDue)} Total)
+            </span>
+          </div>
+        )}
       </div>
 
       {/* Filter Tabs */}
-      <div className="flex gap-2 border-b border-gray-200 pb-2">
+      <div className="flex gap-2 border-b border-gray-100 pb-2">
         {[
-          { key: 'all', label: 'All Invoices' },
-          { key: 'unpaid', label: 'Pending Payment' },
-          { key: 'paid', label: 'Completed Payments' },
+          { id: 'all', label: `All Invoices (${invoices.length})` },
+          { id: 'unpaid', label: `Unpaid (${unpaidCount})` },
+          { id: 'paid', label: `Paid (${invoices.length - unpaidCount})` },
         ].map((tab) => (
           <button
-            key={tab.key}
-            onClick={() => setFilter(tab.key)}
-            className={`px-4 py-2 rounded-xl text-sm font-semibold transition-all cursor-pointer ${
-              filter === tab.key
+            key={tab.id}
+            onClick={() => setFilter(tab.id)}
+            className={`px-4 py-2 text-xs font-bold rounded-xl transition-all cursor-pointer ${
+              filter === tab.id
                 ? 'bg-blue-600 text-white shadow-sm'
                 : 'text-gray-600 hover:bg-gray-100'
             }`}
@@ -172,89 +119,112 @@ export default function CustomerInvoices() {
 
       {/* Invoices List */}
       {filteredInvoices.length === 0 ? (
-        <div className="bg-white rounded-2xl p-12 text-center border border-gray-100">
+        <div className="bg-white rounded-2xl p-12 text-center border border-gray-100 shadow-sm">
           <Receipt className="w-12 h-12 text-gray-300 mx-auto mb-3" />
-          <h3 className="font-bold text-gray-800 text-lg mb-1">No Invoices Found</h3>
-          <p className="text-sm text-gray-500">
-            {filter === 'unpaid'
-              ? 'Great news! You have zero pending payments.'
-              : 'Invoices will appear here once your device diagnosis is completed.'}
-          </p>
+          <p className="text-gray-500 font-medium">No invoices found</p>
+          <p className="text-gray-400 text-xs mt-1">Invoices appear here as soon as repairs are billed.</p>
         </div>
       ) : (
-        <div className="space-y-4">
-          {filteredInvoices.map((inv) => (
-            <div
-              key={inv.id}
-              className="bg-white rounded-2xl p-6 border border-gray-100 shadow-sm hover:border-blue-100 transition-all"
-            >
-              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-                <div className="flex items-start gap-4">
-                  <div className="w-12 h-12 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center shrink-0">
-                    <Receipt className="w-6 h-6" />
-                  </div>
-                  <div>
-                    <div className="flex flex-wrap items-center gap-2 mb-1">
-                      <span className="font-mono font-bold text-gray-900 text-base">
-                        #{inv.invoice_number || 'INV-DRAFT'}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {filteredInvoices.map((inv) => {
+            const isPaid = inv.payment_status === 'paid';
+            const rep = inv.repairs || inv.repair;
+
+            return (
+              <div
+                key={inv.id}
+                className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 hover:border-gray-200 transition-all flex flex-col justify-between"
+              >
+                <div>
+                  <div className="flex items-start justify-between gap-2 mb-3">
+                    <div>
+                      <span className="font-mono text-xs font-bold text-gray-400 uppercase tracking-wider block">
+                        {inv.invoice_number}
                       </span>
-                      {inv.payment_status === 'paid' ? (
-                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-green-100 text-green-700">
-                          <Check className="w-3.5 h-3.5" /> Paid
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-700 animate-pulse">
-                          <Clock className="w-3.5 h-3.5" /> Pending Payment
+                      <h3 className="font-bold text-gray-900 text-base mt-0.5">
+                        {rep ? `${rep.brand || ''} ${rep.model || rep.device_type || 'Device'}` : 'Repair Service'}
+                      </h3>
+                      {rep?.repair_id && (
+                        <span className="text-xs font-mono text-blue-600 font-semibold">
+                          Ticket: {rep.repair_id}
                         </span>
                       )}
                     </div>
-                    <p className="text-xs text-gray-500">
-                      Repair ID: <span className="font-mono font-medium text-blue-600">{inv.repair?.repair_id || '—'}</span> •{' '}
-                      {inv.repair?.device_type} ({inv.repair?.brand} {inv.repair?.model}) • Issued on {formatDate(inv.invoice_date)}
-                    </p>
+                    <span
+                      className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold ${
+                        isPaid ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
+                      }`}
+                    >
+                      {isPaid ? <Check className="w-3 h-3" /> : <Clock className="w-3 h-3" />}
+                      {inv.payment_status?.toUpperCase()}
+                    </span>
+                  </div>
+
+                  {/* Price breakdown */}
+                  <div className="bg-gray-50/70 rounded-xl p-3 text-xs space-y-1.5 my-4 border border-gray-100">
+                    <div className="flex justify-between text-gray-500">
+                      <span>Service Charge</span>
+                      <span>{formatCurrency(inv.service_charge)}</span>
+                    </div>
+                    <div className="flex justify-between text-gray-500">
+                      <span>Parts Cost</span>
+                      <span>{formatCurrency(inv.parts_cost)}</span>
+                    </div>
+                    <div className="flex justify-between text-gray-500">
+                      <span>Labour</span>
+                      <span>{formatCurrency(inv.labour_charge)}</span>
+                    </div>
+                    {inv.discount > 0 && (
+                      <div className="flex justify-between text-emerald-600 font-medium">
+                        <span>Discount</span>
+                        <span>-{formatCurrency(inv.discount)}</span>
+                      </div>
+                    )}
+                    <div className="flex justify-between font-bold text-sm text-gray-900 pt-1.5 border-t border-gray-200">
+                      <span>Total Amount</span>
+                      <span className="text-blue-600">{formatCurrency(inv.total_amount)}</span>
+                    </div>
                   </div>
                 </div>
 
-                <div className="flex items-center gap-6 self-end lg:self-center">
-                  <div className="text-right">
-                    <p className="text-xs text-gray-500">Total Amount</p>
-                    <p className="text-xl font-bold text-gray-900">{formatCurrency(inv.total_amount)}</p>
+                <div className="pt-3 border-t border-gray-100 flex items-center justify-between gap-2">
+                  <div className="text-[11px] text-gray-400">
+                    {formatDate(inv.invoice_date)}
+                    {inv.transaction_id && (
+                      <span className="block font-mono text-emerald-600">Ref: {inv.transaction_id.slice(-8)}</span>
+                    )}
                   </div>
 
-                  {inv.payment_status === 'paid' ? (
+                  {isPaid ? (
                     <button
+                      type="button"
                       onClick={() => window.print()}
-                      className="inline-flex items-center gap-2 px-4 py-2.5 bg-gray-50 hover:bg-gray-100 text-gray-700 rounded-xl text-xs font-semibold border border-gray-200 transition-all cursor-pointer"
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl text-xs font-semibold cursor-pointer transition-colors"
                     >
-                      <Download className="w-4 h-4" /> Receipt
+                      <Download className="w-3.5 h-3.5" /> Receipt
                     </button>
                   ) : (
                     <button
-                      onClick={() => handlePay(inv)}
+                      type="button"
                       disabled={payingId === inv.id}
-                      className="inline-flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-xl text-sm font-bold shadow-md shadow-blue-500/20 transition-all transform hover:-translate-y-0.5 disabled:opacity-50 cursor-pointer"
+                      onClick={() => handlePay(inv)}
+                      className="inline-flex items-center gap-1.5 px-4 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-xl text-xs font-bold shadow-md shadow-blue-500/20 cursor-pointer transition-all disabled:opacity-50"
                     >
                       {payingId === inv.id ? (
                         <>
-                          <Loader2 className="w-4 h-4 animate-spin" /> Processing...
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" /> Processing...
                         </>
                       ) : (
                         <>
-                          <CreditCard className="w-4 h-4" /> Pay via Razorpay
+                          <CreditCard className="w-3.5 h-3.5" /> Pay {formatCurrency(inv.total_amount)}
                         </>
                       )}
                     </button>
                   )}
                 </div>
               </div>
-
-              {inv.payment_status === 'paid' && inv.transaction_id && (
-                <div className="mt-4 pt-3 border-t border-gray-50 text-[11px] text-gray-400 font-mono">
-                  Razorpay Transaction Reference: {inv.transaction_id}
-                </div>
-              )}
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>

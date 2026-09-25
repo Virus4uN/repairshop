@@ -15,6 +15,7 @@
     "framer-motion": "^13.4.3",
     "html2pdf.js": "^0.14.0",
     "lucide-react": "^1.48.0",
+    "pg": "^8.23.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-hot-toast": "^2.6.1",

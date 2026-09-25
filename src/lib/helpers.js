@@ -58,6 +58,23 @@ export const STATUS_ORDER = [
 // Get status index
 export const getStatusIndex = (status) => STATUS_ORDER.indexOf(status);
 
+// Default seed services
+export const DEFAULT_SERVICES = [
+  { id: 'srv-1', service_name: 'Mobile Repair', description: 'Screen replacement, battery replacement, charging port repair, software issues, water damage recovery.', estimated_time: '1-3 Hours', price: 499, is_active: true },
+  { id: 'srv-2', service_name: 'Laptop Repair', description: 'Screen replacement, keyboard repair, motherboard repair, RAM/SSD upgrades, hinge repair, and virus removal.', estimated_time: '2-24 Hours', price: 799, is_active: true },
+  { id: 'srv-3', service_name: 'Computer Repair', description: 'Hardware troubleshooting, component replacement, OS installation, network setup, and data recovery.', estimated_time: '2-24 Hours', price: 599, is_active: true },
+  { id: 'srv-4', service_name: 'Tablet Repair', description: 'Screen replacement, battery replacement, charging issues, button repair, and software updates.', estimated_time: '1-4 Hours', price: 699, is_active: true },
+  { id: 'srv-5', service_name: 'Printer Repair', description: 'Paper jam fix, ink system repair, connectivity issues, print head cleaning, and hardware replacement.', estimated_time: '2-6 Hours', price: 499, is_active: true },
+  { id: 'srv-6', service_name: 'Electronics Repair', description: 'Gaming consoles, smartwatches, routers, speakers, power banks, and home electronics repair.', estimated_time: '2-48 Hours', price: 399, is_active: true }
+];
+
+// Helper to generate repair ID if database trigger is missing
+export const generateRepairId = () => {
+  const year = new Date().getFullYear();
+  const rand = Math.floor(10000 + Math.random() * 90000);
+  return `SHR-${year}-${rand}`;
+};
+
 // Truncate text
 export const truncate = (str, len = 50) => {
   if (!str) return '';

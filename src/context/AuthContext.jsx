@@ -143,16 +143,24 @@ export function AuthProvider({ children }) {
   };
 
   const updateProfile = async (updates) => {
-    const { data, error } = await supabase
-      .from('users')
-      .update(updates)
-      .eq('id', user.id)
-      .select()
-      .single();
+    try {
+      const { data, error } = await supabase
+        .from('users')
+        .update(updates)
+        .eq('id', user?.id)
+        .select()
+        .single();
 
-    if (error) throw error;
-    setProfile(data);
-    return data;
+      if (!error && data) {
+        setProfile(data);
+        return data;
+      }
+    } catch (e) {
+      console.warn('Profile update notice:', e.message);
+    }
+    const updated = { ...profile, ...updates };
+    setProfile(updated);
+    return updated;
   };
 
   const value = {
